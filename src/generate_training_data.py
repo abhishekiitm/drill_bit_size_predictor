@@ -1,3 +1,6 @@
+"""
+This module is used to generate training data from the videos
+"""
 import os
 
 import cv2
@@ -10,6 +13,10 @@ from PIL import Image
 
 
 def get_train_metadata(video_filename):
+    """
+    extracts relevant metadata from the video filename such as width,
+    height and if the video was taken in a dark environment
+    """
     width = int(video_filename[:2])
     height = int(video_filename[3:5])
     is_dark = True if video_filename[5:9] == "dark" else False
@@ -17,6 +24,10 @@ def get_train_metadata(video_filename):
 
 
 class DataGenerator(object):
+    """
+    generates data by processing all the videos in the raw_input_dir directory
+    """
+
     def __init__(
         self,
         raw_input_dir,
@@ -29,6 +40,17 @@ class DataGenerator(object):
         hash_size,
         highfreq_factor,
     ) -> None:
+        """
+        :raw_input_dir: folder location that has the videos
+        :output_dir: folder where the generated images will be saved
+        :SAMPLE_TIME_SEC: sample frame every SAMPLE_TIME_SEC seconds
+        :CROP_X: coordinate where to crop image
+        :CROP_Y: coordinate where to crop image
+        :CROP_H: height of cropped image
+        :CROP_W: width of cropped image
+        :hash_size: hash size that will be used for perceptual hashing
+        :highfreq_factor: high frequency factor that will be used for perceptual hashing
+        """
         self.raw_input_dir = raw_input_dir
         self.output_dir = output_dir
         self.SAMPLE_TIME_SEC = SAMPLE_TIME_SEC
@@ -54,31 +76,48 @@ class DataGenerator(object):
         video_path = os.path.join(self.raw_input_dir, video_filename)
         cap = cv2.VideoCapture(video_path)
 
+        # every sample_frame_no'th frame is sampled
         fps_video = cap.get(cv2.CAP_PROP_FPS)
         sample_frame_no = max(int(fps_video * self.SAMPLE_TIME_SEC), 1)
 
         width, height, is_dark = get_train_metadata(video_filename)
+
         frames_counter = 0
 
+        # dictionary to store the image hashes created by perceptual hashing
         hashed_images = {}
 
         while True:
             check, frame = cap.read()
             frames_counter = frames_counter + 1
+
+            # only every sample_frame_no'th frame is sampled
             if frames_counter % sample_frame_no != 0:
                 continue
 
+            # handles the case when we have reached the end of video
             if not check:
                 print(
                     f"Video: {video_filename} processed, no of image data generated: {len(hashed_images)}"
                 )
                 break
 
+            # frame processing is done here
+
+            # cropped to only get the center part which is relevant to us for pattern recognition
             cropped_frame = frame[Y : Y + H, X : X + W]
-            cropped_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(cropped_frame)
+
+            # convert to grayscale, I am discarding colour information for faster processing
+            # also visually grayscale seems to have enough information for our task
+            gray_img = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2GRAY)
+
+            # perceptual hashing needs image in PIL Image format
+            img = Image.fromarray(gray_img)
             # img.show()
 
+            # every sampled image's hash is calculated
+            # image is saved only if its hash is not in the previous hashes (hashed_images)
+            # this is because similar images will generate the same hash
             hashed_image = imagehash.phash(
                 img, hash_size=hash_size, highfreq_factor=highfreq_factor
             )
@@ -100,6 +139,11 @@ class DataGenerator(object):
         cap.release()
 
     def generate_data(self):
+        """
+        method that initiates data generation
+
+        metadata related to the generate images is store in {output_dir}/data.csv
+        """
         video_filenames = [
             x for x in os.listdir(self.raw_input_dir) if x.endswith(".mp4")
         ]
@@ -123,20 +167,35 @@ class DataGenerator(object):
             )
         )
         col_names = ["image_path", "width", "height", "is_dark", "frame_number"]
+
+        # metadata related to the generate images is store in {output_dir}/data.csv
         data_df = pd.DataFrame(zipped_cols, columns=col_names)
         data_df.to_csv(os.path.join(self.output_dir, "data.csv"))
 
 
 if __name__ == "__main__":
+    # sample video every SAMPLE_TIME_SEC seconds
     SAMPLE_TIME_SEC = 0.1
-    CROP_X = 380
-    CROP_Y = 455
-    CROP_H = 80
-    CROP_W = 170
+
+    # cropping details
+    CROP_X = 390
+    CROP_Y = 475
+    CROP_W = 140
+    CROP_H = 40
+
+    # Since frames closer in time will be very similar to each other I have
+    # used perceptual hashing to identify frames that are sufficiently different
+    # perceptual hashing generates a fingerprint for each sampled frame which can be
+    # compared against for similar frames
+    #
+    # Parameters for perceptual hashing were chosen experimentally
     hash_size = 3
     highfreq_factor = 2
 
+    # folder location that has the videos
     raw_input_dir = "data_raw_videos"
+
+    # folder where the generated images will be saved
     output_dir = "data_generated_images"
 
     data_generator = DataGenerator(
